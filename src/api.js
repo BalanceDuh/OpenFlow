@@ -368,6 +368,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  getBgmAnalysis: (taskId, audioPath) => request(`/api/tasks/${taskId}/bgm-analysis?path=${encodeURIComponent(audioPath || "")}`),
   savePromptVersion: (taskId, promptId, payload) =>
     request(`/api/tasks/${taskId}/prompts/${promptId}/versions`, {
       method: "POST",

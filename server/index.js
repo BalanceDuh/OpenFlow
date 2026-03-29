@@ -10,6 +10,7 @@ import os from "node:os";
 import ffmpegPath from "ffmpeg-static";
 import puppeteer from "puppeteer-core";
 import { db, initDb, uid, now, addLog } from "./db.js";
+import { analyzeMusic } from "./musicAnalysis.js";
 
 initDb();
 
@@ -6719,6 +6720,17 @@ app.post("/api/tasks/:taskId/prompts/:promptId/versions", (req, res, next) => {
   }
 });
 
+
+app.get("/api/tasks/:taskId/bgm-analysis", async (req, res, next) => {
+  try {
+    const audioPath = String(req.query.path || "").trim();
+    if (!audioPath) return res.status(400).json({ error: "missing_audio_path" });
+    const result = await analyzeMusic(audioPath);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
 app.get("/api/tasks/:taskId/bgm-audio-source", async (req, res, next) => {
   try {
     const taskId = req.params.taskId;

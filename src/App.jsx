@@ -158,6 +158,12 @@ const IconCompose = () => (
   </svg>
 );
 
+const IconAnalyzeMusic = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+    <path fill="currentColor" d="M5 4h2v14H5V4Zm4 4h2v10H9V8Zm4-3h2v13h-2V5Zm4 6h2v7h-2v-7Z" />
+  </svg>
+);
+
 const IconPublish = () => (
   <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
     <path fill="currentColor" d="M12 3 6 9h4v6h4V9h4l-6-6Zm-7 14h14v4H5v-4Z" />
@@ -586,6 +592,7 @@ export default function App() {
   const [bgmLibraryFiles, setBgmLibraryFiles] = useState([]);
   const [bgmLibraryDirectory, setBgmLibraryDirectory] = useState("");
   const [showBgmAudioPickerModal, setShowBgmAudioPickerModal] = useState(false);
+  const [showMusicAnalysisModal, setShowMusicAnalysisModal] = useState(false);
   const [bgmAudioPickerQuery, setBgmAudioPickerQuery] = useState("");
   const [bgmSyncPlaying, setBgmSyncPlaying] = useState(false);
   const previewVideoRef = useRef(null);
@@ -822,6 +829,7 @@ export default function App() {
   const latestSegmentBgmVideo = segmentBgmVideos[0] || null;
   const segmentAudioSourceUrl =
     taskId && String(segmentAudioPath || "").trim() ? api.bgmAudioSourceUrl(taskId, String(segmentAudioPath || "").trim()) : "";
+  const musicAnalysisUrl = taskId && String(segmentAudioPath || '').trim() ? api.bgmAudioSourceUrl(taskId, String(segmentAudioPath || '').trim()) + '&analysis=1' : '/Resource/Analysis/music-score-viewer-real-v4.html';
   const segmentClipDuration = Math.max(0, segmentEndSeconds - segmentStartSeconds);
   const segmentTargetDurationValue = Number(segmentTargetDuration);
   const segmentHasTargetDuration = Number.isFinite(segmentTargetDurationValue) && segmentTargetDurationValue > 0;
@@ -2754,7 +2762,7 @@ export default function App() {
                           setBgmAudioPickerQuery("");
                           setShowBgmAudioPickerModal(true);
                         }}
-                        disabled={!taskId || busy || bgmLibraryFiles.length === 0}
+                        disabled={!taskId || busy}
                       >
                         <IconFolderOpen />
                       </button>
@@ -2799,6 +2807,15 @@ export default function App() {
               <div className="bgm-sub-panel bgm-wave-panel">
                 <div className="bgm-panel-top">
                   <div className="bgm-panel-icons">
+                    <button
+                      type="button"
+                      className="icon-button sm"
+                      title="Music Analysis" aria-label="Music Analysis"
+                      onClick={() => setShowMusicAnalysisModal(true)}
+                      disabled={false}
+                    >
+                      <><IconAnalyzeMusic /><span style={{ marginLeft: 6, fontSize: 12 }}>Music Analysis</span></>
+                    </button>
                     <button
                       type="button"
                       className="icon-button sm"
@@ -3206,6 +3223,24 @@ export default function App() {
 
       {imageViewer && <ImageViewerModal value={imageViewer} onClose={() => setImageViewer(null)} />}
 
+      {showMusicAnalysisModal && (
+        <MusicAnalysisModal
+          taskId={taskId}
+          audioUrl={segmentAudioSourceUrl}
+          audioPath={segmentAudioPath}
+          libraryDirectory={bgmLibraryDirectory}
+          files={bgmLibraryFiles}
+          currentStart={segmentStartSeconds}
+          currentEnd={segmentEndSeconds}
+          onApply={({ start, end }) => {
+            setSegmentStartSeconds(start);
+            setSegmentEndSeconds(end);
+            setShowMusicAnalysisModal(false);
+          }}
+          onClose={() => setShowMusicAnalysisModal(false)}
+        />
+      )}
+
       {showBgmAudioPickerModal && (
         <BgmAudioPickerModal
           taskId={taskId}
@@ -3329,6 +3364,198 @@ function TaskListPage({ items, activeTaskId, busy, onBack, onRefresh, onCreateTa
   );
 }
 
+
+function MusicAnalysisModal({
+  taskId,
+  audioUrl,
+  audioPath,
+  libraryDirectory,
+  files,
+  currentStart,
+  currentEnd,
+  onApply,
+  onClose
+}) {
+  const audioRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [status, setStatus] = useState('加载分析数据中…');
+  const [analysis, setAnalysis] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [dragging, setDragging] = useState(null);
+  const [start, setStart] = useState(Number.isFinite(currentStart) ? currentStart : 0);
+  const [end, setEnd] = useState(Number.isFinite(currentEnd) && currentEnd > (currentStart || 0) ? currentEnd : Math.max(8, (currentStart || 0) + 8));
+
+  useEffect(() => {
+    let canceled = false;
+    (async () => {
+      try {
+        if (!taskId || !audioPath) {
+          setStatus('缺少音频路径');
+          return;
+        }
+        const result = await api.getBgmAnalysis(taskId, audioPath);
+        if (canceled) return;
+        setAnalysis(result);
+        setStatus('分析数据已就绪');
+        const d = Number(result?.duration) || 0;
+        if (d > 0) {
+          setEnd((prev) => {
+            const base = prev > start + 0.05 ? prev : Math.min(d, Math.max(8, start + 8));
+            return Math.max(start + 0.05, Math.min(d, base));
+          });
+        }
+      } catch (error) {
+        if (canceled) return;
+        setStatus(`分析加载失败：${error?.message || 'unknown_error'}`);
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [taskId, audioPath]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return undefined;
+    const onTime = () => setCurrentTime(Number(audio.currentTime) || 0);
+    const onLoaded = () => setStatus((s) => (String(s).includes('失败') ? s : '音频已就绪'));
+    const onPlay = () => setStatus('播放中');
+    const onPause = () => setStatus('已暂停');
+    const onErr = () => setStatus('音频加载失败');
+    audio.addEventListener('timeupdate', onTime);
+    audio.addEventListener('loadedmetadata', onLoaded);
+    audio.addEventListener('play', onPlay);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('error', onErr);
+    return () => {
+      audio.removeEventListener('timeupdate', onTime);
+      audio.removeEventListener('loadedmetadata', onLoaded);
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('error', onErr);
+    };
+  }, [audioUrl]);
+
+  const duration = Number(analysis?.duration) || 20;
+  const left = 80;
+  const width = 1400;
+  const W = 1540;
+  const H = 640;
+  const xAt = (t) => left + (Math.max(0, Math.min(duration, t)) / Math.max(duration, 0.001)) * width;
+
+  const validRms = useMemo(() => (analysis?.bins || []).map((b) => b.rms).filter(Number.isFinite), [analysis]);
+  const minR = validRms.length ? Math.min(...validRms) : -60;
+  const maxR = validRms.length ? Math.max(...validRms) : 0;
+  const normR = (v) => (Number.isFinite(v) && maxR !== minR ? (v - minR) / (maxR - minR) : 0);
+
+  const setByClientX = (clientX, mode = 'cursor') => {
+    const wrap = wrapRef.current;
+    const audio = audioRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const rel = Math.max(left, Math.min(left + width, clientX - rect.left));
+    const t = ((rel - left) / width) * duration;
+    if (mode === 'start') {
+      const next = Math.max(0, Math.min(t, end - 0.05));
+      setStart(next);
+    } else if (mode === 'end') {
+      const next = Math.max(start + 0.05, Math.min(duration, t));
+      setEnd(next);
+    } else {
+      if (audio) audio.currentTime = Math.max(0, Math.min(duration, t));
+      setCurrentTime(Math.max(0, Math.min(duration, t)));
+    }
+  };
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragging) return;
+      setByClientX(e.clientX, dragging);
+    };
+    const onUp = () => setDragging(null);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging, start, end, duration]);
+
+  return (
+    <div className="modal-wrap" onClick={onClose}>
+      <div className="modal-card" style={{ width: 'min(96vw, 1560px)', height: 'min(94vh, 1000px)' }} onClick={(e) => e.stopPropagation()}>
+        <div className="row between" style={{ marginBottom: 12, alignItems: 'center' }}>
+          <div>
+            <h3 style={{ marginBottom: 6 }}>Music Analysis</h3>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>真实数据驱动：波形、节拍、音符、拖拽与区间选择均在此弹窗中完成。</div>
+          </div>
+          <button onClick={onClose}>Close</button>
+        </div>
+
+        <div style={{ display: 'grid', gap: 8, marginBottom: 12, fontSize: 12 }}>
+          <div><b>当前音乐：</b>{audioPath || 'None'}</div>
+          <div><b>音乐目录：</b>{libraryDirectory || 'Unknown'}</div>
+          <div><b>目录文件：</b>{(files || []).map((x) => x.split('/').pop()).join(' / ') || 'None'}</div>
+        </div>
+
+        <div className="row" style={{ gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <audio ref={audioRef} src={audioUrl || ''} controls preload="metadata" style={{ width: 520 }} />
+          <div style={{ fontSize: 12 }}>状态：{status}</div>
+          <div style={{ fontSize: 12 }}>时长：{duration.toFixed(2)}s</div>
+          <div style={{ fontSize: 12 }}>当前：{currentTime.toFixed(2)}s</div>
+          <div style={{ fontSize: 12 }}>Start：{start.toFixed(2)}s</div>
+          <div style={{ fontSize: 12 }}>End：{end.toFixed(2)}s</div>
+        </div>
+
+        <div ref={wrapRef} style={{ position: 'relative', border: '1px solid #334155', borderRadius: 12, background: '#020617', overflow: 'hidden' }}>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', display: 'block' }}>
+            <rect x="0" y="0" width={W} height={H} fill="#020617" />
+            {Array.from({ length: Math.floor(duration) + 1 }, (_, i) => (
+              <g key={i}>
+                <line x1={xAt(i)} y1="40" x2={xAt(i)} y2="600" stroke="#334155" strokeOpacity="0.35" />
+                <text x={xAt(i) - 6} y="26" fill="#cbd5e1" fontSize="12">{i}s</text>
+              </g>
+            ))}
+
+            <text x="20" y="74" fill="#cbd5e1" fontSize="13">真实波形 / RMS</text>
+            {(analysis?.bins || []).map((b, idx) => {
+              const x = xAt(b.t);
+              const h = 18 + normR(b.rms) * 100;
+              return <line key={`bar_${idx}`} x1={x} y1="160" x2={x} y2={160 - h} stroke="#38bdf8" strokeWidth="2" opacity="0.92" />;
+            })}
+            <line x1="80" y1="160" x2="1480" y2="160" stroke="#38bdf8" strokeOpacity="0.22" />
+
+            <text x="20" y="252" fill="#cbd5e1" fontSize="13">真实节拍 / Beat Peaks</text>
+            {(analysis?.beats || []).map((t, idx) => <line key={`beat_${idx}`} x1={xAt(t)} y1="270" x2={xAt(t)} y2="314" stroke="#f59e0b" strokeWidth="2" />)}
+
+            <text x="20" y="356" fill="#cbd5e1" fontSize="13">真实音符块 / Pitch Notes</text>
+            {[366, 386, 406, 426, 446].map((y) => <line key={y} x1="80" y1={y} x2="1480" y2={y} stroke="#64748b" opacity="0.82" />)}
+            {(analysis?.notes || []).map((n, idx) => {
+              const x = xAt(n.start);
+              const w = Math.max(6, xAt(n.end) - xAt(n.start));
+              const y = 446 - ((n.midi - 48) / 24) * 90;
+              return <rect key={`note_${idx}`} x={x} y={y - 7} width={w} height="14" rx="5" fill="#22c55e" fillOpacity="0.88" stroke="#22c55e" />;
+            })}
+
+            <text x="20" y="536" fill="#cbd5e1" fontSize="13">时间窗选择 / Segment Window</text>
+            <rect x={xAt(start)} y="510" width={Math.max(8, xAt(end) - xAt(start))} height="56" fill="#a78bfa" fillOpacity="0.10" stroke="#a78bfa" strokeDasharray="6 4" />
+            <line x1={xAt(start)} y1="510" x2={xAt(start)} y2="566" stroke="#a78bfa" strokeWidth="4" />
+            <line x1={xAt(end)} y1="510" x2={xAt(end)} y2="566" stroke="#a78bfa" strokeWidth="4" />
+          </svg>
+
+          <div title="播放指针" onMouseDown={(e) => { setDragging('cursor'); setByClientX(e.clientX, 'cursor'); }} style={{ position: 'absolute', left: xAt(currentTime), top: 0, bottom: 0, width: 2, background: '#f43f5e', boxShadow: '0 0 12px rgba(244,63,94,.55)', cursor: 'ew-resize' }} />
+          <div title="拖动 Start" onMouseDown={(e) => { setDragging('start'); setByClientX(e.clientX, 'start'); }} style={{ position: 'absolute', left: xAt(start) - 6, top: 510, width: 12, height: 56, cursor: 'ew-resize' }} />
+          <div title="拖动 End" onMouseDown={(e) => { setDragging('end'); setByClientX(e.clientX, 'end'); }} style={{ position: 'absolute', left: xAt(end) - 6, top: 510, width: 12, height: 56, cursor: 'ew-resize' }} />
+        </div>
+
+        <div className="row between" style={{ marginTop: 14, alignItems: 'center' }}>
+          <div style={{ fontSize: 12, opacity: 0.82 }}>已接入真实分析数据：RMS、Beat Peaks、Pitch Note Blocks。可播放、拖拽播放指针、拖动 Start/End，并回写 Step5。</div>
+          <button onClick={() => onApply?.({ start, end })}>Apply to Step5</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function BgmAudioPickerModal({ taskId, files, query, currentPath, directory, onQueryChange, onClose, onSelect }) {
   const audioRef = useRef(null);
   const [previewPath, setPreviewPath] = useState(() => String(currentPath || "").trim());
